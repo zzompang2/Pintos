@@ -1,0 +1,338 @@
+			+--------------------+
+			|       CS 330       |
+			| PROJECT 1: THREADS |
+			|   DESIGN DOCUMENT  |
+			+--------------------+
+				   
+---- GROUP ----
+
+ChangSu Ham <zzompang2@kaist.ac.kr>
+SeokJun Kim <kimogin@kaist.ac.kr>
+
+---- PRELIMINARIES ----
+
+CS330 OS 수업 내용/자료
+
+https://web.stanford.edu/~ouster/cgi-bin/cs140-winter16/pintos/pintos_6.html#SEC100
+	Pintos #1 Document
+
+https://jennysgap.tistory.com/entry/운영체제의-기초-11-Process-Synchronization-2
+	Lock, Semaphore, Monitor에 대한 개념 정리
+
+https://exploreembedded.com/wiki/Semaphore
+	Semaphore, Lock 그리고 priority donation/inversion 대한 설명 
+
+https://bowbowbow.tistory.com/20
+	Alarm Clock에 대한 구현 아이디어 참고
+
+			     ALARM CLOCK
+			     ===========
+
+---- DATA STRUCTURES ----
+
+>> A1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+
+- thread.h:
+  struct thread
+  {
+  	int64_t wake_up_tick; 
+  }
+
+	wake_up_tick: 스레드가 깨어 나야하는 TICK 
+
+- timer.c:	
+	static struct list sleep_thread_list;
+	Block된 thread의 list
+
+---- ALGORITHMS ----
+
+>> A2: Briefly describe what happens in a call to timer_sleep(),
+>> including the effects of the timer interrupt handler.
+
+timer_sleep()이 불렸을 때:
+	1. timer interrupt가 활성화된 경우 timer interrupt handler가 tick 값을 올린다.
+	   timer_sleep 에서 현재 tick 값을 불러온 후 변경되면 안 되므로 현재 
+	   interrupt 상태를 저장하고 interrupt 를 비활성화한다.
+	2. 현재 thread 의 wake_up_tick에 깨어나야 할 시간을 저장한다.
+	3. 현재 thread 를 sleep_thread_list에 넣은 후
+	4. status 를 block으로 바꾼다.
+	5. 다시 원래의 interrupt 상태로 돌려놓는다.
+
+>> A3: What steps are taken to minimize the amount of time spent in
+>> the timer interrupt handler?
+
+- block 된 thread 들만 확인할 수 있도록 sleep_thread_list 를 만들었다.
+- sleep_thread_list 를 wake_up_tick 이 낮은 thread 부터 정렬하면 확인해야 할
+  thread 개수를 줄일 수 있으므로, wakeup_tick 을 비교할 수 있는 compare_tick 
+  함수 또한 만들었다.
+
+---- SYNCHRONIZATION ----
+
+>> A4: How are race conditions avoided when multiple threads call
+>> timer_sleep() simultaneously?
+
+- wake_up_tick 이 같은 thread 가 들어올 경우, 
+  먼저 sleep 되었던 thread 가 먼저 깨어날 수 있도록 compare_tick 을 수정하고 
+  sleep_thread_list 에서 더 앞으로 오게 하였다.
+
+- thread 가 깨어날 때 ready queue 에 priority 순서로 정렬되도록 넣기 위해
+  compare_priority 함수를 만들었다. 그리고 꺠어난 thread 가 현재 실행 중인 
+  thread 보다 priority 가 높다면 스위치 해준다.
+
+>> A5: How are race conditions avoided when a timer interrupt occurs
+>> during a call to timer_sleep()?
+
+- timer_sleep 에서 현재 tick 값을 불러온 이후엔 interrupt 를 비활성화 함으로써
+  sleep_thread_list 에 넣고 block 할 때 까지 다른 interrupt 의 영향을 받지
+  않게 한다.
+
+---- RATIONALE ----
+
+>> A6: Why did you choose this design?  In what ways is it superior to
+>> another design you considered?
+
+- sleep_thread_list :
+  timer_interrupt 가 실행될 때 마다 모든 thread 가 저장된 all_list 를 탐색한다면
+  시간이 느려질 것이다. 더 빠르게 하기 위해서 sleep 된 thread 만 저장된
+  sleep_thread_list 를 만들었다.
+
+- thread 구조체 안에 wake_up_tick :
+	만약 깨어나야 할 tick 을 구조체 밖에서 정의했다면 깨어나야 할 때
+	이 tick 이 어떤 thread 의 tick 인지 찾는데 오랜 시간이 걸릴 것이다.
+
+- sleep_thread_list 를 wake_up_tick 순서로 정렬 :
+	sleep_thread_list 를 wake_up_tick 이 낮은 thread 부터 정렬하여
+	확인해야 할 thread 개수를 줄였다. 만약 push 된 순서로 정렬되어 있다면
+	wake_up_tick 이나 priority 를 비교할 때 list 내의 모든 thread 를
+	비교해야 하는 번거로움이 생긴다.
+
+			 PRIORITY SCHEDULING
+			 ===================
+
+---- DATA STRUCTURES ----
+
+>> B1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+- thread.h:
+	struct thread
+	{
+		int origin_priority;
+		struct list lock_list;
+		struct lock *wishing_lock;    
+	}
+	
+	origin_priority : Priority 를 donate 받을 경우 Thread 의 기존 priority 를 저장
+	lock_list       : 현재 thread 가 소유한 lock 의 list
+	wishing_lock    : 현재 thread 가 요청한 lock 
+
+- synch.h:
+	struct lock 
+	{
+		struct list_elem elem;
+	}
+
+   elem : Lock 의 list 를 만들기 위한 구조체
+
+- synch.c:
+	struct semaphore_elem 
+	{
+	 int priority;
+	}
+	
+  priority: 현재 semaphore 를 가지고 있는 thread 의 priority
+
+
+>> B2: Explain the data structure used to track priority donation.
+
+- struct thread:
+	Lock 을 소유한 thread 가 priority 를 donate 받을 경우, thread 의 기존 
+	priority 를 origin_priority 안에 저장 그리고 priority 업데이트 
+
+- struct lock:
+	- struct thread *holder:
+	  Lock 의 holder 의 priority 의 값을 업데이트 하기 위해 사용 
+
+	- semaphore:
+	  - unsigned value: 
+	  	소유 가능한 semaphore 의 남은 개수
+	  - struct list waiters:
+	  	현재 semaphore 기다리는 thread 들의 list
+
+>> Use ASCII art to diagram a nested donation.  (Alternately, submit a
+>> .png file.)
+
+	- L, M, H => thread with low, medium, high priority respectively
+	- lock1 is held by L and lock2 is held by M.
+
+	+-----+    +-----+    +-----+
+	|  L  |    |  M  |    |  H  | 			
+	+-----+    +-----+    +-----+ 
+	   |          | 
+	   |          |     
+	 lock1      lock2
+
+	- H wants to acquire lock2.
+
+	+-----+    +-----+    +-----+
+	|  L  |    |  M  |    |  H  | 			
+	+-----+    +-----+    +-----+ 
+	   |          |     /
+	   |          |	   /
+	 lock1      lock2
+
+	+-----+    +-----+    +-----+
+	|  L  |    |  H  | <= |  H  | 			
+	+-----+    +-----+    +-----+ 
+	   |          |     /
+	   |          |	   /
+	 lock1      lock2
+
+	- M wants to acquire lock1.
+
+	+-----+    +-----+    +-----+
+	|  L  |    |  H  | <= |  H  | 			
+	+-----+    +-----+    +-----+ 
+	   |     /    |     /
+	   |    /     |	   /
+	 lock1      lock2
+
+	+-----+    +-----+    +-----+
+	|  H  | <= |  H  | <= |  H  | 			
+	+-----+    +-----+    +-----+ 
+	   |     /    |     /
+	   |    /     |	   /
+	 lock1      lock2
+
+	+-----+    +-----+    +-----+
+	|  L  |    |  H  | <= |  H  | 
+	+-----+    +-----+    +-----+ 
+	              |     /
+	              |	   /
+	            lock2
+							lock1
+	
+	+-----+    +-----+    +-----+
+	|  L  |    |  M  |    |  H  | 			
+	+-----+    +-----+    +-----+ 
+	              |          |   
+	              |	         |
+	            lock1      lock2
+
+---- ALGORITHMS ----
+
+>> B3: How do you ensure that the highest priority thread waiting for
+>> a lock, semaphore, or condition variable wakes up first?
+
+  semaphore 혹은 condition 의 waiters 에 넣을 때 priority 높은순으로 정렬되도록
+	list_insert_ordered 함수와 compare_priority 함수를 사용하였다. 그리고 다음 
+	thread 에게 넘겨줄 때 list_pop_front 함수를 사용하여 waiters 의 맨 앞의 
+	thread 에게 넘겨주었다.
+
+>> B4: Describe the sequence of events when a call to lock_acquire()
+>> causes a priority donation.  How is nested donation handled?
+
+  1. lock 의 holder 의 기존의 priority 를 저장한다. 
+	2. 현재 thread 의 priority 로 업데이트 해준다.
+	3. holder 가 block 되어 있는 경우, waiters 에서 제거 후 unblock 하여
+		 ready_list 안에 넣어준다.
+	4. lock 의 waiters 안에 priority 높은 순으로 현재 thread 를 넣어준다.
+	5. 현재 thread 의 status 를 block 으로 변경한다.
+
+  Nested donation :
+	  Priority donation 받은 thread 가 기다리고 있는 lock 이 있다면 그 lock 의
+		holder 의 priority 를 donation 받은 priority 로 업데이트 해주고 block 을 
+		깨워준다. 
+
+>> B5: Describe the sequence of events when lock_release() is called
+>> on a lock that a higher-priority thread is waiting for.
+
+  우리는 waiters 를 priority 순서로 정렬했으므로 lock 의 waiters 맨 앞의 thread 
+	상태를 unblock 으로 바꿔준 뒤 이 thread 에게 CPU 를 yield 한다.
+  
+---- SYNCHRONIZATION ----
+
+>> B6: Describe a potential race in thread_set_priority() and explain
+>> how your implementation avoids it.  Can you use a lock to avoid
+>> this race?
+
+	Potential race :
+		1. 새로운 priority 가 ready 상태 thread 의 priority 보다 작은 경우
+		2. 새로운 priority 가 donation 해준 thread 의 priority 보다 큰 경우
+		3. priority update 도중 timer interrupt 가 발생하는 경우
+
+	Our implementation to avoid the races :
+		- 1번의 경우, priority 를 업데이트 한 후 ready queue 에 맨 앞에 있는 thread 
+			에게 yield 한다.
+		- 2번의 경우, origin priority 를 초기화하여 lock 을 release 한 이후에도 
+			donation 해준 thread 에게 순서를 넘기지 않도록 한다.
+		- 3번의 경우, intr_disable 함수를 사용하여 interrupt 를 비활성화 시킨다.
+
+  Using a lock to avoid potential races :
+		글로벌 변수로 lock 을 하나 선언하고, thread_set_priority 를 실행할 때 그 
+		lock을 가져가고 함수가 끝날 때 release 하도록 한다. 그리고 함수 실행 도중 
+		interrupt 로 인해 unblock 된 thread 가 있다면 이 lock 을 요청하도록 한다.
+		그러면 함수가 끝나기 전까진 이 lock 을 소유할 수 없으므로 race condition 으로부터 
+		보호할 수 있다.
+
+---- RATIONALE ----
+
+>> B7: Why did you choose this design?  In what ways is it superior to
+>> another design you considered?
+
+  - thread 구조체 안에 origin_priority 선언 :
+		donation 을 받고 lock 을 release 해줄 때 기존의 값으로 돌아가기 위해 thread 
+		구조체 안에 origin_priority 변수를 만들었다. 그리고 lock 을 release 해줄 
+		때마다 donation 을 받은 여부를 알 필요가 있다. 그것은 origin_priority 값을
+		-1 로 초기화 해줌으로써 여부를 알 수 있도록 하였다.
+
+	- thread 구조체 안에 lock_list 선언 :
+		lock 을 여러 개 갖고 있고 donation 을 중복하여 받은 경우, priority 가 가장 높은
+		thread 가 필요한 lock 을 release 할 때 까지 실행되어야 한다. 따라서 소유하고 있는
+		lock 의 list 를 만들었고, lock 을 release 할 때마다 priority 가 가장 높은 
+		thread 가 원하는 lock 을 알 수 있도록 하였다.
+		그리고 lock 을 release 하고 block 될 때, donation 을 해준 다른 thread 의
+		priority 로 돌아가야 한다. 따라서 남아 있는 lock 들의 waiters 도 볼 필요가 있다.
+
+	- thread 구조체 안에 wishing_lock 선언 :
+		현재의 thread 가 원하는 lock 의 holder 의 priority 를 업데이트 해줘야 된다.
+		sema_down 함수 안에서는 semaphore 의 정보만 얻을 수 있기에 lock 의 holder 를 
+		알 수 없다. 따라서, 원하는 lock 을 thread 구조체 안에 저장해줘서 lock 의 holder
+		에 접근할 수 있도록 하였다.
+
+	- ready_list 를 priority 순서롤 정렬 :
+		ready_list 에서 priority 가장 높은 thread 를 찾는 수고를 덜기 위해 thread 를
+		넣거나 priority 값이 바뀔 때 마다 정렬해 주었다.
+
+	
+			   SURVEY QUESTIONS
+			   ================
+
+Answering these questions is optional, but it will help us improve the
+course in future quarters.  Feel free to tell us anything you
+want--these questions are just to spur your thoughts.  You may also
+choose to respond anonymously in the course evaluations at the end of
+the quarter.
+
+>> In your opinion, was this assignment, or any one of the three problems
+>> in it, too easy or too hard?  Did it take too long or too little time?
+	코드를 이해하는 것이 제일 어려웠고 제일 오래 걸렸습니다.  
+
+>> Did you find that working on a particular part of the assignment gave
+>> you greater insight into some aspect of OS design?
+  Priority Scheduling 관련 부분을 구현하면서 lock 혹은 semaphore 에 대해서 더 
+	자세히 배운 것 같습니다.
+
+>> Is there some particular fact or hint we should give students in
+>> future quarters to help them solve the problems?  Conversely, did you
+>> find any of our guidance to be misleading?
+
+>> Do you have any suggestions for the TAs to more effectively assist
+>> students, either for future quarters or the remaining projects?
+
+>> Any other comments?
+	GDB 를 실행하지 못하였습니다.

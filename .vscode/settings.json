@@ -1,0 +1,9 @@
+{
+    "editor.rulers": [
+        70
+    ],
+    "files.associations": {
+        "*.inc": "c",
+        "main.h": "c"
+    }
+}

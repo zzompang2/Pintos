@@ -1,0 +1,442 @@
+#token = 1
+
+      +---------------------------+
+      |           CS 330          |
+      | PROJECT 2: USER PROGRAMS  |
+      |      DESIGN DOCUMENT      |
+      +---------------------------+
+
+---- GROUP ----
+
+>> Fill in the names and email addresses of your group members.
+
+ChangSu Ham <zzompang2@kaist.ac.kr>
+SeokJun Kim <kimogin@kaist.ac.kr>
+
+---- PRELIMINARIES ----
+
+>> If you have any preliminary comments on your submission, notes for the
+>> TAs, or extra credit, please give them here.
+
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+
+https://web.stanford.edu/class/cs140/projects/pintos/pintos_3.html#SEC32
+  Pintos #2 Document
+
+http://esos.hanyang.ac.kr/files/courseware/undergraduate/PINTOS/Pintos_all.pdf
+	System call 및 synchronization에 대한 구현 아이디어 참고
+
+         ARGUMENT PASSING
+         ================
+
+---- DATA STRUCTURES ----
+
+>> A1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+  없다.
+  
+---- ALGORITHMS ----
+
+>> A2: Briefly describe how you implemented argument parsing.  How do
+>> you arrange for the elements of argv[] to be in the right order?
+>> How do you avoid overflowing the stack page?
+
+  - pintos 의 stack frame 에 맞게 파일과 인자의 정보를 stack 안에 넣어주기
+	  위해서 다음과 같이 진행하였다:
+    - 먼저, user program 의 stack을 file_arg_length ( null 포함한
+      string 의 길이 ) 만큼 감소한다. 
+    - 파일 이름, 각 인자의 값를 차례대로 stack 에 저장하고 이름의 길이만큼의
+      byte 개수를 stack 에 더해서 마지막에 다시 0xc0000000 을 가르키도록
+      한다.
+    - 다시 file_arg_length 만큼 stack를 감소한다.
+    - stack 을 word_align 의 값 만큼에 해당하는 byte 를 감소한다.
+    - memset() 을 통해 다시 stack을 올릴 필요없이 감소한 부분의 값을 0으로 
+      초기화한다.
+    - stack 을 4 byte (주소 크기)만큼 감소하고 감소한 부분의 값을 0으로 
+      초기화한다.
+    - command 명과 각 인자의 이름의 주소를 차례대로 stack 에 넣어준다. 
+      이때 반복적으로 stack을 먼저 4 byte 만큼 감소한다. 파일 이름과
+      인자의 이름의 주소는 argv_addr 라는 배열에 저장되어 있다.
+    - stack 을 4 byte 만큼 감소하고 감소한 부분의 값을  argv_addr의 
+      주소로 초기화한다. ( memcpy () 사용 )
+    - stack 을 int 의 크기 (4 byte) 만큼 감소하고 감소한 부분의 값을 
+      argc 로 초기화한다. ( memcpy () 사용 )
+    - 가상 return 주소를 위해 stack 을 4 byte 만큼 감소하고 감소한 부분의
+      값을 0으로 초기화한다.
+  - Command 이름과 인자들의 주소를 stack 안에다가 넣어줄 때 무조건 
+    "right to left" 방식을 따랐다.
+
+---- RATIONALE ----
+
+>> A3: Why does Pintos implement strtok_r() but not strtok()?
+  - strtok_r 의 경우 3번 째 매개 변수 안에다가 strtok 가 실행되고 남은
+    문자열의 뒷 부분을 저장한다. (save_ptr)
+    예시) 
+      char *filename =  "args-multiple some arguments for you!"
+      token = strtok_r (file_name, " ", &save_ptr);
+      printf ("%s\n", save_ptr);
+      for ( token = strtok_r (NULL, " ", &save_ptr); token != NULL;
+            token = strtok_r (NULL, " ", &save_ptr))
+        printf ("%s\n", save_ptr);
+    =======>
+      "some arguments for you!"
+      "arguments for you!"
+      "for you!"
+      "you!"
+
+  - 이런 경우, parsing 도중에 다른 interrupt 로 인해 잠시 중단해도 다시 
+    안전하게 parsing 을 마칠 수 있다. strtok () 이런 매개 변수가 없기 때문에
+    중간에 interrupt 가 들어오면 남은 문자열의 정보가 없어질 수도 있다.  
+  - 또한 strtok () 는 정적 버퍼을 사용해야 한다. 반면에 strtok_r ()는 동적
+    배열을 사용한다. 정적 버퍼인 경우 함수의 global 변수로 선언되기 떄문에 
+    같은 process 안에 있는 thread 도 사용 가능하다. 따라서, 
+    synchronization 없이 서로 이 변수를 접근하면 문제가 생길 수도 있다.
+    
+>> A4: In Pintos, the kernel separates commands into a executable name
+>> and arguments.  In Unix-like systems, the shell does this
+>> separation.  Identify at least two advantages of the Unix approach.
+
+  - Unix 에서는 각 인자을 바로 볼 수 있기 때문에 올바르지 않은 인자를 
+    커널에게 주는 것을 user program을 실행하기 전에 방지할 수 있다. Pintos
+    에서는 인자들을 shell 에서 분리하지 않기 때문에 인자를 parsing 하기 
+    전까진 인자의 값이 올바른 지 확인할 수 없다. 
+  - Unix 에서는 command 이름과 인자들이 다 parsing 된 상태에서 kernel 이 
+    시작하기 때문에 커널이랑 user thread 안에서 parsing 으로 걸리는 시간을 
+    단축할 수 있다.
+  - command 가 파일을 여는 부분이면 kernel 이 시작하기 전에 파일이 존재하는 
+    지 바로 볼 수 있다. Pintos 에서는 start_process () 함수 안에 load ()
+    함수를 실행할 때까지 파일의 존재 여부를 알 수 없다.
+
+           SYSTEM CALLS
+           ============
+
+---- DATA STRUCTURES ----
+
+>> B1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+- thread.h:
+
+  - struct child_info
+    {
+      struct list_elem elem;
+      int tid;
+      int exit_status;
+      struct semaphore sema;
+    };
+    tid         : 현재 thread 의 중단 직전의 tid 값 
+    exit_status : 현재 thread 의 중단 직전의 상태를 나타내는 int 값
+    sema         : 현재 thread 가 죽기 전까지 부모가 기다려줄 수 있게 
+                  해주는 semaphore 
+
+  - struct file_elem
+    {
+      struct list_elem elem;
+      struct file *file;
+      int fd;
+    };
+    fd   : 현재 thread 가 open 한 file 의 File Descriptor  
+    file : 현재 thread 가 open 한 file 의 struct 구조체 
+
+  - struct thread
+    {
+  #ifdef USERPROG
+      struct thread *parent;
+      struct list file_list;              
+      bool success;                       
+      struct list child_list;             
+      struct child_info *info;          
+      struct semaphore self_sema;
+  #endif
+    }
+    parent     : 현재 thread 의 부모 thread
+    file_list  : 현재 thread 의 
+    success     : load 가 성공적으로 됐는 지 알려주는 boolean 값
+    child_list : 현재 thread 의 child thread 들
+    info       : 각 child thread 으로부터 필요한 정보 및 synchronization
+                 을 위한 semaphore       
+    self_sema  : child thread 가 load 를 할 때까지 현재 thread 가 
+                 기다려주기 위한 semaphore
+     
+
+- syscall.c:
+  struct lock fd_lock;
+  fd_lock : file descriptor 를 file 에게 줄 때 방해를 받지 않도록 하기 
+            하기 위한 lock
+
+  struct semaphore read_sema, write_sema;
+  read_sema  : reader writer 의 synchronization 을 위한 구조체
+  write_sema : reader writer 의 synchronization 을 위한 구조체
+
+>> B2: Describe how file descriptors are associated with open files.
+>> Are file descriptors unique within the entire OS or just within a
+>> single process?
+  - file 을 open ()이라는 system call 로 열어줄 때 filesys_open 함수가
+    불린다.
+  - 이 함수의 반환 값이 NULL 이 아니고 실행 파일이면 이 파일에게 file 
+    descriptor 값을 부여한다.
+  - 이때 이 file descriptor 값은 무조건 1보다 크다. 왜냐하면 0, 1 의 fd 
+    값은 각 stdin, stdout 를 위한 것이고 음수의 file descriptor 를 주지 
+    않도록 설계하였기 때문이다.
+  - 각 open file 마다 unique 한 file descriptor 값이 있고 이것은 process 
+    뿐만이 아니라 OS 전체에게 해당한다. 
+  - 현재 thread 의 자식도 file descriptor를 상속받지 않는다.  
+
+---- ALGORITHMS ----
+
+>> B3: Describe your code for reading and writing user data from the
+>> kernel.
+
+  - Reading:
+    - user program 에서 read() 라는 system call 로 파일을 열어줄 때 
+      파일의 file descriptor, 읽은 부분을 저장할 buffer, 그리고 파일에서 
+      읽을 만큼의 byte size 를 인자로 준다.
+    - system call handler 함수로 넘어간다.
+    - 인자로 들어온 inter_frame f 의 esp의 맨 아래 값은 system call 
+      number 를 가리킨다. 이것은 8이므로 SYS_READ () 함수로 넘어간다. 
+    - f->esp 으로부터 각 4 8 12 byte 에 저장된 주소는 위에서 언급한 인자의
+      주소들이다. 따라서, 사용하기 쉽게 저장한다.
+    - user address의 범위는 0xc0000000 (PHYS_BASE) 을 넘어가면 안되기 
+      때문에 is_kernel_vaddr () 함수로 buffer 의 주소, 즉 read 한 내용을 
+      저장할 주소가 알맞은 범위안에 있는지 확인한다. 아니면 바로 
+      sys_exit(-1) 을 호출한다.
+    - 윗 부분을 통과하면 새로 만든 sys_read 함수 안으로 들어간다.
+    - fd 값이 0이면 stdin 이므로 input_getc() 함수를 호출하여 keyboard 로
+      부터 input를 1 byte 씩 받아 buffer 를 저장한다. 이 함수가 NULL 를 
+      반환하면 keyboard input 이 더 이상 들어오지 않는다는 뜻으로 바로
+      read 를 종료한다.
+    - fd 값이 0이 아니고 2보다 작으면 잘못된 file descriptor 이므로 -1를
+      반환한다. (error)
+    - 정상적인 fd 값이면 현재 thread 의 TCB (struct thread) 안에서 fd 
+      값에 해당하는 file 을 찾고 file_read() 함수를 호출하여 buffer 에 
+      정보를 저장하고 읽은 byte 개수를 반환한다.  
+
+  - Writing:
+    - user program 에서 write() 로 파일을 열어줄 때 파일의 fd, 쓸 부분을
+      저장할 buffer, 그리고 파일에 쓸 만큼의 byte size 를 인자로 준다.
+    - system call handler 함수로 넘어간다.
+    - 인자로 들어온 inter_frame f 의 esp의 맨 아래 값은 system call 
+      number를 가리킨다. 이것은 8 이므로 SYS_WRITE () 함수로 넘어간다. 
+    - f->esp 으로부터 각 4 8 12 byte에 저장된 주소는 위에서 언급한 인자의
+      주소들이다. 따라서, 사용하기 쉽게 저장한다.
+    - sys_write () 함수를 호출한다.
+    - fd 값이 1이면 stdout 이므로 putbuf() 를 호출하여 buffer의 정보를 
+      byte 개수만큼 output console 에 저장한다.
+    - fd 값이 2 와 같거나 크면 현재 thread 의 TCB (struct thread) 안에서
+      fd 값에 해당하는 file 을 찾고 file_write () 함수를 호출하여 파일에 
+      buffer 의 정보를 byte 개수만큼 적는다.
+    - 그 외에 fd 값은 잘못된 write 안에서는 fd 값으므로 -1를 반환한다.
+
+>> B4: Suppose a system call causes a full page (4,096 bytes) of data
+>> to be copied from user space into the kernel.  What is the least
+>> and the greatest possible number of inspections of the page table
+>> (e.g. calls to pagedir_get_page()) that might result?  What about
+>> for a system call that only copies 2 bytes of data?  Is there room
+>> for improvement in these numbers, and how much?
+
+	4096 byte 의 데이터를 복사한 경우, physical memory 에 올바르게 복사된 지
+	알기 위해선 pagedir_get_page() 함수를 최대 4096 번 실행해야 한다. 각 
+	memory 의 byte 가 흩어져서 저장될 수 있기 때문이다. 만약에 page 단위로 
+	physical memory 에 복사될 경우, pagedir_get_page() 함수를 한 번만 
+	실행하면 된다.
+  2 byte 의 데이터를 복사한 경우에도, 최대 2번의 pagedir_get_page () 함수를 
+  호출할 것이다. page 단위로  physical memory 에 복사될 경우, 
+	pagedir_get_page() 함수를 한 번만 실행하면 된다.
+	메모리 점검을 더 효율적이게 할 수 있는 방법은 현재로선 없는 것 같습니다.
+
+
+>> B5: Briefly describe your implementation of the "wait" system call
+>> and how it interacts with process termination.
+
+  - user program 에서 wait()를 실행할 때 기다려줄 자식 thread 의 tid를 
+    인자로 준다.
+  - system call handler 함수로 넘어간다.
+  - 인자로 들어온 inter_frame f 의 esp의 맨 아래 값은 system call 
+    number를 가리킨다. 이것은 3 이므로 switch statement 안에서 SYS_WAIT
+    case 로 넘어간다.
+  - f->esp + 4 에 저장된 값은 pid 이므로 process_wait 를 호출하면서 이 
+    pid 값을 인자로 넣어준다.
+  - 각 thread 는 자식 thread 의 정보를 저장할 배열을 가지고 있다 
+    (child_list)
+  - 따라서, 인자로 들어온 tid 를 가지고 있는 thread 가 자식 중에 있는지 
+    확인한다.
+  - 존재하지 않다면 -1 를 반환하여 에러를 표시한다.
+  - 자식 thread 가 맞다면 자식 thread 가 끝날 때까지 기다려주기 위해 
+    sema_down () 함수를 호출한다. 
+  - sema_down () 를 호출한 semaphore 는 각 thread 가 가지고 있는 info 에
+    저장된 semaphore 이다.
+  - 즉 자식이 죽을 때, 이 semaphore 에다가 sema_up 를 호출하기 때문에 
+    자식이 죽은 뒤에야 부모가 계속 실행할 수 있다.
+  - 이것은 zombie thread 를 없애주기 위한 설계이다.
+  - 자식 thread 의 배열에서 tid 에 해당하는 자식을 제거하고 free 함수로    
+    더이상 필요없는 자식의 정보를 메모리에서 없애준다.
+  
+>> B6: Any access to user program memory at a user-specified address
+>> can fail due to a bad pointer value.  Such accesses must cause the
+>> process to be terminated.  System calls are fraught with such
+>> accesses, e.g. a "write" system call requires reading the system
+>> call number from the user stack, then each of the call's three
+>> arguments, then an arbitrary amount of user memory, and any of
+>> these can fail at any point.  This poses a design and
+>> error-handling problem: how do you best avoid obscuring the primary
+>> function of code in a morass of error-handling?  Furthermore, when
+>> an error is detected, how do you ensure that all temporarily
+>> allocated resources (locks, buffers, etc.) are freed?  In a few
+>> paragraphs, describe the strategy or strategies you adopted for
+>> managing these issues.  Give an example.
+
+  1. 잘못된 pointer 를 접근하려는 경우 page fault가 발생한다. 이 경우는 
+    크게 두가지로 나눌 수 있다:
+    1. user program 에서 Kernel 가상 메모리에 접근:
+      - 이런 경우를 방지하기 위해 먼저 system call 의 인자 값들이 올바른   
+        주소에 저장되어 있는지 확인한다. 
+      - 이 부분은 syscall_handler 에서 구현했다.
+      - 인자들은 f->esp 에서 4의 배수를 더한 주소에 저장되어 있다.
+      - is_kernel_vaddr () 함수를 통해 인자의 주소를 확인한다.   
+      - 주소가 커널 영역에 있다면 ( > PHYS_BASE ) sys_exit(-1) 함수를 
+        호출하여 프로그램 실행을 중단한다.
+      - 또한, PHYS_BASE 를 접근할 경우, exception.c 의 page fault 
+        함수에서 sys_exit(-1) 를 호출하도록 설계하였다.
+      - 예시) 
+        - read (handle, (char *) 0xc0100000, 123) 일 경우, f->esp + 8
+          주소에 0xc0100000 가 저장된다.
+        - 이 주소는 file 에 읽은 정보를 저장할 buffer 의 주소이다.
+        - 따라서, syscall_handler () 함수에서 buffer 에 저장하기 전에 이
+          주소가 커널의 가상 주소인지 확인한다. ( is_kernel_vaddr () )
+        - 커널 가상 주소이기 때문에 sys_exit(-1) 가 호출된다.          
+    2. Physical memory 로 mapping 이 되지 않은 user 가상 메모리에 접근:
+      - 현재 thread 의 pagedir 가 잘못되었을 경우거나 잘못된 주소에서 
+        정보를 읽어오려는 경우이다.
+      - 이런 경우를 해결하기 위해 exception.c의 page fault 함수에서
+        page fault 가 일어난 주소가 user 영역의 주소일 경우 sys_exit(-1)
+        를 호출하도록 수정하였다.
+      - 예시) 
+        - open ((char *) 0x20101234) 일 경우, f->esp + 4 주소에 
+          0x20101234 가 저장된다.
+        - 이 주소를 접근할 때 page fault 가 발생할 수도 있고 발생하지
+          않는다면 filesys_open 에서 결국 발생할 것이다. 이 주소에는 파일이
+          저장되어 있지 않기 때문이다.
+        - 따라서, page fault exception 이 일어나고 sys_exit(-1) 가 
+          호출된다.
+
+  2. user program 에서 에러가 발생하면 memory resource 를 다 제거하기 위해 
+     sys_exit (-1) 함수가 호출되도록 설계했다.
+    - sys_exit (-1) 함수 안에서 thread_exit() 함수가 불린다.
+    - thread_exit () 에서 schedule () 이 일어나기 전에 process_exit () 
+      함수를 호출한다. (user program 일 경우)
+    - 현재 thread 가 open 한 모든 파일을 file_close() 함수로 닫아주고 
+      각 파일의 memory 를 free 해준다.
+    - 현재 thread 의 자식의 정보를 가지고 있는 child_list 를 제거하고 
+      각  child 의 정보를 free 해준다.
+    - 현재 thread 의 page directory 를 없애준다. (pagedir_destroy (pd) )
+    - 커널에 있는 모든 thread 의 list에서 자기 자신을 제거한다.  
+      ( list_remove (&thread_current()->allelem) )
+    - schedule () 를 호출하면 thread_schedule_tail () 함수가 호출되고 
+      thread 의 상태가 THREAD_DYING 이므로 thread 의 page 를 free 해준다.
+      ( palloc_free_page () )
+
+---- SYNCHRONIZATION ----
+
+>> B7: The "exec" system call returns -1 if loading the new executable
+>> fails, so it cannot return before the new executable has completed
+>> loading.  How does your code ensure this?  How is the load
+>> success/failure status passed back to the thread that calls "exec"?
+
+  - exec () system call 이 호출되면 process_execute () 함수가 호출되도록
+    설계하였다.
+  - process_execute () 안에서는 인자로 들어온 파일 이름를 실행하기 위한 
+    새로운 자식 thread 를 thread_create () 함수로 생성한다.
+  - thread_create () 안에서 새로 생성된 thread 의 부모를 현재 thread 로 
+    지정한다.
+  - 다시 process_execute ()으로 돌아오면 현재 thread 의 self_sema 라는
+    semaphore 로 sema_down () 을 해서 sema_up 이 일어날 때까지 기다린다.
+    (sema_init 할때 value 를 0으로 지정했기 때문이다.)
+  - 반면에 새로 생성된 자식 thread 은 load () 함수로 실행 파일을 로딩한다.
+  - 이 절차가 끝나고 나면 로딩의 성공 여부를 부모의 success 라는 필드안에 
+    저장한다.
+  - 또한, 부모의 self_sema 에 sema_up () 함수를 호출하여 sema 의 value 를
+    1로 올린다. 
+  - 즉, 부모의 self_sema 를 통해서 부모가 자식 thread 가 로딩을 온전히
+    마치고 나서야 실행될 수 있기 때문에 로딩이 끝나기 전에 부모가 실행이 
+    끝나버리는 경우를 해결하였다.
+     
+>> B8: Consider parent process P with child process C.  How do you
+>> ensure proper synchronization and avoid race conditions when P
+>> calls wait(C) before C exits?  After C exits?  How do you ensure
+>> that all resources are freed in each case?  How about when P
+>> terminates without waiting, before C exits?  After C exits?  Are
+>> there any special cases?
+
+  - P 는 C 들의 정보들을 리스트로 갖고 있도록 한다. 그리고 C 가 종료될 경우,
+    P 의 리스트 안에 저장된 C 의 정보(tid, exit_status 등)를 업데이트한다.
+    그러면 그 정보들은 C 가 종료되어도 free 되지 않는다. 그러면 wait 이 
+		언제 되더라도 C 의 정보는 리스트에 남아 있으므로 race condition 을 
+		피할 수 있다.
+
+  - P 는 C 의 정보가 더이상 필요 없어지면 C 의 정보를 free 한다. P 가
+    종료될 때 P 가 갖고 있는 모든 자식의 정보를 free 해준다면
+    C 가 종료되기 이전이든 이후이든 resource 문제는 없다.
+
+---- RATIONALE ----
+
+>> B9: Why did you choose to implement access to user memory from the
+>> kernel in the way that you did?
+  - 특정 주소가 user 영역인데 physical memory 로 mapping 된 주소가 아니면 
+    page fault 가 일어난다. 이럴 경우, thread 의 resource 및 정보를 확실히
+    없애주기 위해 page fault handler 안에서 if  is_user_vaddr() 함수를 
+    사용하여 맞을 경우, sys_exit(-1)를 호출하도록 설계했다.     
+
+>> B10: What advantages or disadvantages can you see to your design
+>> for file descriptors?
+  - 각 file 이 unique 한 file descriptor 를 받을 수 있게 구현하였다.
+    따라서, file descriptor 로 파일을 read 하거나 write 할 때 파일이
+    겹칠 일이 없다.
+    또한, 각 thread 마다 자기가 open 한 파일만 file_list 안에 저장하였다. 
+    이 file_list 는 다른 thread 들과 공유를 하지 못하기 때문에 파일의 
+    정보에 대한 안전성을 확보할 수 있다. 
+
+>> B11: The default tid_t to pid_t mapping is the identity mapping.
+>> If you changed it, what advantages are there to your approach?
+
+  - Pintos 에서는 하나의 process 가 하나의 thread 을 소유하고 있다. 따라서,
+    tid_t 와 pid_t 는 똑같고 1-1 mapping 이 가능하다.
+  - 이것을 바꾼다는 것은 multithreading 을 가능케 하는 것이다. 실제 
+    현존하는 os 들은 multithread 을 지원한다. 이것을 고려해서 다시 pintos 를
+    설계한다면 user program 의 성능과 속도가 더 좋아질 것이다.
+  - 또한, tid_t to pid_t mapping 이 존재한다면 나의 부모 process 가 어떤 
+    process 인지 바로 알 수 있을 것이다.
+    예시) 
+     pid_t = f( tid_t), f(x) != x
+     이럴 경우, 나의 tid 를 통해 부모의 thread 를 알고 부모에 더 쉽게 
+     접근할 수 있을 것이다. 
+
+  
+
+         SURVEY QUESTIONS
+         ================
+
+Answering these questions is optional, but it will help us improve the
+course in future quarters.  Feel free to tell us anything you
+want--these questions are just to spur your thoughts.  You may also
+choose to respond anonymously in the course evaluations at the end of
+the quarter.
+
+>> In your opinion, was this assignment, or any one of the three problems
+>> in it, too easy or too hard?  Did it take too long or too little time?
+
+>> Did you find that working on a particular part of the assignment gave
+>> you greater insight into some aspect of OS design?
+
+>> Is there some particular fact or hint we should give students in
+>> future quarters to help them solve the problems?  Conversely, did you
+>> find any of our guidance to be misleading?
+
+>> Do you have any suggestions for the TAs to more effectively assist
+>> students, either for future quarters or the remaining projects?
+
+>> Any other comments?
